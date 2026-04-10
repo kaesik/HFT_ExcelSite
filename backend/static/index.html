@@ -1,0 +1,102 @@
+﻿<!doctype html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HFT Excel Localhost</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <h1>HFT Excel</h1>
+            <p>Lokalny podgląd workbooka</p>
+        </div>
+
+        <div class="panel">
+            <h2>Excele</h2>
+            <div id="workbook-info" class="muted">Ładowanie...</div>
+        </div>
+
+        <div class="panel">
+            <h2>Arkusze</h2>
+            <div id="sheet-list" class="sheet-list"></div>
+        </div>
+    </aside>
+
+    <main class="main">
+        <section class="topbar">
+            <div>
+                <h2 id="active-sheet-title">Wybierz arkusz</h2>
+                <p id="active-sheet-meta" class="muted">Brak danych</p>
+            </div>
+
+            <form id="range-form" class="range-form">
+                <label>
+                    Start row
+                    <input type="number" id="start-row" value="1" min="1" />
+                </label>
+                <label>
+                    End row
+                    <input type="number" id="end-row" value="30" min="1" />
+                </label>
+                <label>
+                    Start col
+                    <input type="number" id="start-column" value="1" min="1" />
+                </label>
+                <label>
+                    End col
+                    <input type="number" id="end-column" value="12" min="1" />
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="include-empty" />
+                    Puste komórki
+                </label>
+                <button type="submit">Wczytaj zakres</button>
+            </form>
+        </section>
+
+        <section class="content-grid">
+            <div class="panel table-panel">
+                <div class="panel-header">
+                    <h3>Zakres arkusza</h3>
+                    <span id="range-meta" class="muted"></span>
+                </div>
+                <div id="table-container" class="table-container">
+                    <div class="placeholder">Wybierz arkusz, aby zobaczyć dane.</div>
+                </div>
+            </div>
+
+            <div class="side-panels">
+                <div class="panel">
+                    <h3>Podsumowanie arkusza</h3>
+                    <div id="sheet-summary" class="details-list">
+                        <div class="placeholder">Brak danych.</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h3>Szczegóły komórki</h3>
+                    <div id="cell-details" class="details-list">
+                        <div class="placeholder">Kliknij komórkę w tabeli.</div>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h3>Formuły</h3>
+                    <button id="load-formulas-button" class="secondary-button" type="button">
+                        Wczytaj formuły
+                    </button>
+                    <div id="formulas-list" class="formula-list">
+                        <div class="placeholder">Formuły nie zostały jeszcze wczytane.</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

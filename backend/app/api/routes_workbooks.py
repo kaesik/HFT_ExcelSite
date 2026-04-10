@@ -1,0 +1,162 @@
+﻿from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter
+from fastapi import HTTPException
+from fastapi import Query
+
+from app.config import WORKBOOKS_DIR
+from app.services.sheet_service import build_sheet_formulas
+from app.services.sheet_service import build_sheet_range
+from app.services.sheet_service import build_sheet_summary
+from app.services.sheet_service import count_formula_cells
+from app.services.workbook_service import get_two_workbooks
+from app.services.workbook_service import get_workbook_path
+from app.services.workbook_service import list_workbook_files
+from app.services.workbook_service import load_formula_workbook
+from app.services.workbook_service import validate_sheet_name
+
+router = APIRouter(prefix="/api", tags=["workbooks"])
+
+
+@router.get("/health")
+def health() -> dict[str, str]:
+    return {
+        "message": "HFT Excel localhost is running",
+        "workbooksDirectory": str(WORKBOOKS_DIR),
+    }
+
+
+@router.get("/workbooks")
+def get_workbooks() -> dict[str, Any]:
+    try:
+        workbooks = list_workbook_files()
+
+        return {
+            "count": len(workbooks),
+            "workbooks": [
+                {
+                    "fileName": workbook.name,
+                    "extension": workbook.suffix.lower(),
+                }
+                for workbook in workbooks
+            ],
+        }
+
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@router.get("/workbooks/{file_name}/summary")
+def get_workbook_summary(file_name: str) -> dict[str, Any]:
+    try:
+        workbook_path = get_workbook_path(file_name)
+        workbook = load_formula_workbook(workbook_path)
+
+        sheets = []
+        for sheet in workbook.worksheets:
+            formula_cells_count = count_formula_cells(sheet)
+
+            sheets.append(
+                {
+                    "title": sheet.title,
+                    "maxRow": sheet.max_row,
+                    "maxColumn": sheet.max_column,
+                    "dimensions": sheet.calculate_dimension(),
+                    "hasFormulas": formula_cells_count > 0,
+                    "formulaCellsCount": formula_cells_count,
+                }
+            )
+
+        return {
+            "fileName": workbook_path.name,
+            "sheetCount": len(workbook.sheetnames),
+            "sheetNames": workbook.sheetnames,
+            "sheets": sheets,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@router.get("/workbooks/{file_name}/sheet/{sheet_name}/summary")
+def get_sheet_summary(file_name: str, sheet_name: str) -> dict[str, Any]:
+    try:
+        workbook_path = get_workbook_path(file_name)
+        workbook = load_formula_workbook(workbook_path)
+        validate_sheet_name(workbook, sheet_name)
+
+        sheet = workbook[sheet_name]
+        return build_sheet_summary(workbook_path, sheet)
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@router.get("/workbooks/{file_name}/sheet/{sheet_name}/range")
+def get_sheet_range(
+    file_name: str,
+    sheet_name: str,
+    start_row: int = Query(1, ge=1),
+    end_row: int = Query(20, ge=1),
+    start_column: int = Query(1, ge=1),
+    end_column: int = Query(10, ge=1),
+    include_empty: bool = Query(False),
+) -> dict[str, Any]:
+    try:
+        workbook_path = get_workbook_path(file_name)
+        workbook_with_formulas, workbook_with_values = get_two_workbooks(workbook_path)
+        validate_sheet_name(workbook_with_formulas, sheet_name)
+
+        formula_sheet = workbook_with_formulas[sheet_name]
+        value_sheet = workbook_with_values[sheet_name]
+
+        return build_sheet_range(
+            workbook_path=workbook_path,
+            formula_sheet=formula_sheet,
+            value_sheet=value_sheet,
+            start_row=start_row,
+            end_row=end_row,
+            start_column=start_column,
+            end_column=end_column,
+            include_empty=include_empty,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@router.get("/workbooks/{file_name}/sheet/{sheet_name}/formulas")
+def get_sheet_formulas(
+    file_name: str,
+    sheet_name: str,
+    limit: int = Query(100, ge=1, le=2000),
+) -> dict[str, Any]:
+    try:
+        workbook_path = get_workbook_path(file_name)
+        workbook_with_formulas, workbook_with_values = get_two_workbooks(workbook_path)
+        validate_sheet_name(workbook_with_formulas, sheet_name)
+
+        formula_sheet = workbook_with_formulas[sheet_name]
+        value_sheet = workbook_with_values[sheet_name]
+
+        return build_sheet_formulas(
+            workbook_path=workbook_path,
+            formula_sheet=formula_sheet,
+            value_sheet=value_sheet,
+            limit=limit,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
