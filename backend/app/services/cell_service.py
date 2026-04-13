@@ -43,75 +43,149 @@ def get_display_cells(formula_sheet, value_sheet, row: int, column: int):
 
 
 def extract_fill_color(cell) -> str | None:
-    fill = cell.fill
+    fill = getattr(cell, "fill", None)
 
-    if fill is None or fill.fill_type is None:
+    if fill is None:
         return None
 
-    fg_color = fill.fgColor
+    if getattr(fill, "fill_type", None) is None:
+        return None
 
+    fg_color = getattr(fill, "fgColor", None)
     if fg_color is None:
         return None
 
     color_type = getattr(fg_color, "type", None)
 
+    if color_type == "rgb":
+        rgb = getattr(fg_color, "rgb", None)
+        if isinstance(rgb, str):
+            rgb_text = rgb.strip().upper()
+            if rgb_text and rgb_text not in {"00000000", "000000", "000000FF"}:
+                if len(rgb_text) == 8:
+                    return f"#{rgb_text[2:]}"
+                if len(rgb_text) == 6:
+                    return f"#{rgb_text}"
+
+    if color_type == "theme":
+        theme = getattr(fg_color, "theme", None)
+        tint = getattr(fg_color, "tint", None)
+
+        if theme is not None:
+            if tint is not None and float(tint) != 0:
+                return f"theme:{theme}:tint:{tint}"
+            return f"theme:{theme}"
+
+    if color_type == "indexed":
+        indexed = getattr(fg_color, "indexed", None)
+        if isinstance(indexed, int):
+            return f"indexed:{indexed}"
+
     rgb = getattr(fg_color, "rgb", None)
-    if rgb is not None:
-        rgb_text = str(rgb).strip()
+    if isinstance(rgb, str):
+        rgb_text = rgb.strip().upper()
         if rgb_text and rgb_text not in {"00000000", "000000", "000000FF"}:
             if len(rgb_text) == 8:
                 return f"#{rgb_text[2:]}"
             if len(rgb_text) == 6:
                 return f"#{rgb_text}"
 
-    indexed = getattr(fg_color, "indexed", None)
-    if indexed is not None:
-        return f"indexed:{indexed}"
-
     theme = getattr(fg_color, "theme", None)
-    tint = getattr(fg_color, "tint", None)
-    if theme is not None:
-        if tint is not None:
-            return f"theme:{theme}:tint:{tint}"
+    if isinstance(theme, int):
         return f"theme:{theme}"
 
-    if color_type:
-        return f"type:{color_type}"
+    indexed = getattr(fg_color, "indexed", None)
+    if isinstance(indexed, int):
+        return f"indexed:{indexed}"
 
     return None
 
 
-def has_data_validation(sheet, coordinate: str) -> bool:
-    data_validations = getattr(sheet, "data_validations", None)
+def _coordinate_in_validation(validation, coordinate: str) -> bool:
+    try:
+        if coordinate in validation.cells:
+            return True
+    except Exception:
+        pass
 
-    if not data_validations:
-        return False
-
-    validations = getattr(data_validations, "dataValidation", None)
-    if not validations:
-        return False
-
-    for validation in validations:
-        try:
-            if coordinate in validation.cells:
+    try:
+        for cell_range in validation.ranges:
+            if coordinate in cell_range:
                 return True
-        except Exception:
-            pass
+    except Exception:
+        pass
 
-        try:
-            for cell_range in validation.ranges.ranges:
+    try:
+        sqref = getattr(validation, "sqref", None)
+        if sqref:
+            for cell_range in sqref.ranges:
                 if coordinate in cell_range:
                     return True
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     return False
 
 
-def classify_cell(formula_cell, value_cell, sheet) -> dict[str, bool | str | None]:
+def get_data_validation_info(sheet, requested_coordinate: str, source_coordinate: str | None = None) -> dict[str, Any] | None:
+    data_validations = getattr(sheet, "data_validations", None)
+
+    if not data_validations:
+        return None
+
+    validations = getattr(data_validations, "dataValidation", None)
+    if not validations:
+        return None
+
+    coordinates_to_check = [requested_coordinate]
+    if source_coordinate and source_coordinate not in coordinates_to_check:
+        coordinates_to_check.append(source_coordinate)
+
+    for validation in validations:
+        for coordinate in coordinates_to_check:
+            if _coordinate_in_validation(validation, coordinate):
+                formula_1 = getattr(validation, "formula1", None)
+                formula_2 = getattr(validation, "formula2", None)
+
+                return {
+                    "type": getattr(validation, "type", None),
+                    "operator": getattr(validation, "operator", None),
+                    "formula1": str(formula_1) if formula_1 is not None else None,
+                    "formula2": str(formula_2) if formula_2 is not None else None,
+                    "allowBlank": getattr(validation, "allowBlank", None),
+                    "showDropDown": getattr(validation, "showDropDown", None),
+                    "showInputMessage": getattr(validation, "showInputMessage", None),
+                    "showErrorMessage": getattr(validation, "showErrorMessage", None),
+                    "sqref": str(getattr(validation, "sqref", None)),
+                }
+
+    return None
+
+
+def has_data_validation(sheet, requested_coordinate: str, source_coordinate: str | None = None) -> bool:
+    validation_info = get_data_validation_info(
+        sheet=sheet,
+        requested_coordinate=requested_coordinate,
+        source_coordinate=source_coordinate,
+    )
+    return validation_info is not None
+
+
+def classify_cell(formula_cell, value_cell, sheet, requested_coordinate: str) -> dict[str, bool | str | None | dict[str, Any]]:
     fill_color = extract_fill_color(formula_cell)
     has_formula = formula_cell.data_type == "f"
-    has_dropdown = has_data_validation(sheet, formula_cell.coordinate)
+
+    validation_info = get_data_validation_info(
+        sheet=sheet,
+        requested_coordinate=requested_coordinate,
+        source_coordinate=formula_cell.coordinate,
+    )
+
+    has_dropdown = False
+    if validation_info is not None:
+        validation_type = validation_info.get("type")
+        if validation_type == "list":
+            has_dropdown = True
 
     formula_value = formula_cell.value
     cached_value = value_cell.value
@@ -127,6 +201,7 @@ def classify_cell(formula_cell, value_cell, sheet) -> dict[str, bool | str | Non
     return {
         "hasFormula": has_formula,
         "hasDropdown": has_dropdown,
+        "validationInfo": validation_info,
         "isInputCandidate": is_input_candidate,
         "isResultCandidate": is_result_candidate,
         "fillColor": fill_color,
@@ -137,6 +212,7 @@ def build_cell_payload(
     formula_cell,
     value_cell,
     sheet,
+    requested_coordinate: str,
     include_empty: bool = False,
 ) -> dict[str, Any] | None:
     formula_value = formula_cell.value
@@ -149,10 +225,12 @@ def build_cell_payload(
         formula_cell=formula_cell,
         value_cell=value_cell,
         sheet=sheet,
+        requested_coordinate=requested_coordinate,
     )
 
     return {
         "address": formula_cell.coordinate,
+        "requestedAddress": requested_coordinate,
         "row": formula_cell.row,
         "column": formula_cell.column,
         "value": normalize_value(formula_value),
@@ -163,6 +241,7 @@ def build_cell_payload(
         "fillColor": classification["fillColor"],
         "hasFormula": classification["hasFormula"],
         "hasDropdown": classification["hasDropdown"],
+        "validationInfo": classification["validationInfo"],
         "isInputCandidate": classification["isInputCandidate"],
         "isResultCandidate": classification["isResultCandidate"],
     }

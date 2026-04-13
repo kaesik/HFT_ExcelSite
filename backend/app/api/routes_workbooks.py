@@ -16,6 +16,10 @@ from app.services.workbook_service import get_workbook_path
 from app.services.workbook_service import list_workbook_files
 from app.services.workbook_service import load_formula_workbook
 from app.services.workbook_service import validate_sheet_name
+from app.services.mapping_service import build_sheet_candidates
+from app.services.mapping_service import build_sheet_color_statistics
+from app.services.mapping_service import build_sheet_style_diagnostics
+from app.services.mapping_service import build_sheet_dropdown_diagnostics
 
 router = APIRouter(prefix="/api", tags=["workbooks"])
 
@@ -102,13 +106,13 @@ def get_sheet_summary(file_name: str, sheet_name: str) -> dict[str, Any]:
 
 @router.get("/workbooks/{file_name}/sheet/{sheet_name}/range")
 def get_sheet_range(
-    file_name: str,
-    sheet_name: str,
-    start_row: int = Query(1, ge=1),
-    end_row: int = Query(20, ge=1),
-    start_column: int = Query(1, ge=1),
-    end_column: int = Query(10, ge=1),
-    include_empty: bool = Query(False),
+        file_name: str,
+        sheet_name: str,
+        start_row: int = Query(1, ge=1),
+        end_row: int = Query(20, ge=1),
+        start_column: int = Query(1, ge=1),
+        end_column: int = Query(10, ge=1),
+        include_empty: bool = Query(False),
 ) -> dict[str, Any]:
     try:
         workbook_path = get_workbook_path(file_name)
@@ -137,9 +141,9 @@ def get_sheet_range(
 
 @router.get("/workbooks/{file_name}/sheet/{sheet_name}/formulas")
 def get_sheet_formulas(
-    file_name: str,
-    sheet_name: str,
-    limit: int = Query(100, ge=1, le=2000),
+        file_name: str,
+        sheet_name: str,
+        limit: int = Query(100, ge=1, le=2000),
 ) -> dict[str, Any]:
     try:
         workbook_path = get_workbook_path(file_name)
@@ -154,6 +158,101 @@ def get_sheet_formulas(
             formula_sheet=formula_sheet,
             value_sheet=value_sheet,
             limit=limit,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@router.get("/workbooks/{file_name}/sheet/{sheet_name}/candidates")
+def get_sheet_candidates(file_name: str, sheet_name: str) -> dict[str, Any]:
+    try:
+        workbook_path = get_workbook_path(file_name)
+        workbook_with_formulas, workbook_with_values = get_two_workbooks(workbook_path)
+        validate_sheet_name(workbook_with_formulas, sheet_name)
+
+        formula_sheet = workbook_with_formulas[sheet_name]
+        value_sheet = workbook_with_values[sheet_name]
+
+        return build_sheet_candidates(
+            workbook_path=workbook_path,
+            formula_sheet=formula_sheet,
+            value_sheet=value_sheet,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@router.get("/workbooks/{file_name}/sheet/{sheet_name}/colors")
+def get_sheet_colors(file_name: str, sheet_name: str) -> dict[str, Any]:
+    try:
+        workbook_path = get_workbook_path(file_name)
+        workbook_with_formulas, workbook_with_values = get_two_workbooks(workbook_path)
+        validate_sheet_name(workbook_with_formulas, sheet_name)
+
+        formula_sheet = workbook_with_formulas[sheet_name]
+        value_sheet = workbook_with_values[sheet_name]
+
+        return build_sheet_color_statistics(
+            workbook_path=workbook_path,
+            formula_sheet=formula_sheet,
+            value_sheet=value_sheet,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@router.get("/workbooks/{file_name}/sheet/{sheet_name}/styles")
+def get_sheet_styles(
+        file_name: str,
+        sheet_name: str,
+        start_row: int = Query(1, ge=1),
+        end_row: int = Query(80, ge=1),
+        start_column: int = Query(1, ge=1),
+        end_column: int = Query(30, ge=1),
+) -> dict[str, Any]:
+    try:
+        workbook_path = get_workbook_path(file_name)
+        workbook = load_formula_workbook(workbook_path)
+        validate_sheet_name(workbook, sheet_name)
+
+        formula_sheet = workbook[sheet_name]
+
+        return build_sheet_style_diagnostics(
+            workbook_path=workbook_path,
+            formula_sheet=formula_sheet,
+            start_row=start_row,
+            end_row=end_row,
+            start_column=start_column,
+            end_column=end_column,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@router.get("/workbooks/{file_name}/sheet/{sheet_name}/dropdowns")
+def get_sheet_dropdowns(file_name: str, sheet_name: str) -> dict[str, Any]:
+    try:
+        workbook_path = get_workbook_path(file_name)
+        workbook = load_formula_workbook(workbook_path)
+        validate_sheet_name(workbook, sheet_name)
+
+        formula_sheet = workbook[sheet_name]
+
+        return build_sheet_dropdown_diagnostics(
+            workbook_path=workbook_path,
+            formula_sheet=formula_sheet,
         )
 
     except HTTPException:

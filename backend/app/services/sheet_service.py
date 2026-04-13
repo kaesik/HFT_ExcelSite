@@ -113,6 +113,7 @@ def build_sheet_range(
                 formula_cell=formula_cell,
                 value_cell=value_cell,
                 sheet=formula_sheet,
+                requested_coordinate=formula_sheet.cell(row=row_index, column=column_index).coordinate,
                 include_empty=include_empty,
             )
 
@@ -177,6 +178,7 @@ def build_sheet_formulas(
                 formula_cell=formula_cell,
                 value_cell=value_cell,
                 sheet=formula_sheet,
+                requested_coordinate=formula_sheet.cell(row=row_index, column=column_index).coordinate,
                 include_empty=True,
             )
 
