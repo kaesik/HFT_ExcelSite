@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>HFT Excel Localhost</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/frontend/styles.css" />
 </head>
 <body>
 <div class="layout">
@@ -31,39 +31,25 @@
                 <h2 id="active-sheet-title">Wybierz arkusz</h2>
                 <p id="active-sheet-meta" class="muted">Brak danych</p>
             </div>
-
-            <form id="range-form" class="range-form">
-                <label>
-                    Start row
-                    <input type="number" id="start-row" value="1" min="1" />
-                </label>
-                <label>
-                    End row
-                    <input type="number" id="end-row" value="30" min="1" />
-                </label>
-                <label>
-                    Start col
-                    <input type="number" id="start-column" value="1" min="1" />
-                </label>
-                <label>
-                    End col
-                    <input type="number" id="end-column" value="12" min="1" />
-                </label>
-                <label class="checkbox-label">
-                    <input type="checkbox" id="include-empty" />
-                    Puste komórki
-                </label>
-                <button type="submit">Wczytaj zakres</button>
-            </form>
         </section>
 
         <section class="content-grid">
             <div class="panel table-panel">
                 <div class="panel-header">
-                    <h3>Zakres arkusza</h3>
-                    <span id="range-meta" class="muted"></span>
+                    <h3>Kolorowe pola</h3>
+                    <span id="candidates-meta" class="muted"></span>
                 </div>
-                <div id="table-container" class="table-container">
+
+                <div class="filter-bar">
+                    <button type="button" class="filter-button active" data-filter="all">Wszystkie</button>
+                    <button type="button" class="filter-button" data-filter="display">Display</button>
+                    <button type="button" class="filter-button" data-filter="result">Result</button>
+                    <button type="button" class="filter-button" data-filter="input_1">Input 1</button>
+                    <button type="button" class="filter-button" data-filter="input_2">Input 2</button>
+                    <button type="button" class="filter-button" data-filter="dropdown">Dropdown</button>
+                </div>
+
+                <div id="candidates-container" class="candidates-container">
                     <div class="placeholder">Wybierz arkusz, aby zobaczyć dane.</div>
                 </div>
             </div>
@@ -79,7 +65,7 @@
                 <div class="panel">
                     <h3>Szczegóły komórki</h3>
                     <div id="cell-details" class="details-list">
-                        <div class="placeholder">Kliknij komórkę w tabeli.</div>
+                        <div class="placeholder">Kliknij pole z listy.</div>
                     </div>
                 </div>
 
@@ -97,6 +83,6 @@
     </main>
 </div>
 
-<script src="/static/app.js"></script>
+<script type="module" src="/frontend/js/app.js"></script>
 </body>
 </html>

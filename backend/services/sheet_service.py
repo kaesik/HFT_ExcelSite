@@ -1,8 +1,31 @@
-﻿from fastapi import HTTPException
+﻿from __future__ import annotations
 
-from app.config import MAX_RANGE_CELLS
-from app.services.cell_service import build_cell_payload
-from app.services.cell_service import get_display_cells
+from pathlib import Path
+from threading import RLock
+from typing import Any
+
+from fastapi import HTTPException
+
+from backend.config import MAX_RANGE_CELLS
+from backend.services.cell_service import build_cell_payload
+from backend.services.cell_service import get_display_cells
+
+_sheet_cache_lock = RLock()
+_formula_count_cache: dict[str, int] = {}
+_sheet_summary_cache: dict[str, dict[str, Any]] = {}
+_sheet_formulas_cache: dict[str, dict[str, Any]] = {}
+
+
+def _get_sheet_cache_key(workbook_path: Path, sheet_name: str, suffix: str = "") -> str:
+    try:
+        modified_time = workbook_path.stat().st_mtime
+    except OSError:
+        modified_time = 0
+
+    base_key = f"{workbook_path.resolve()}::{modified_time}::{sheet_name}"
+    if suffix:
+        return f"{base_key}::{suffix}"
+    return base_key
 
 
 def clamp_range(
@@ -34,6 +57,24 @@ def clamp_range(
 
 
 def count_formula_cells(sheet) -> int:
+    workbook_path = getattr(getattr(sheet, "parent", None), "_hft_workbook_path", None)
+
+    if workbook_path is None:
+        formula_count = 0
+        for row_index in range(1, sheet.max_row + 1):
+            for column_index in range(1, sheet.max_column + 1):
+                cell = sheet.cell(row=row_index, column=column_index)
+                if cell.data_type == "f":
+                    formula_count += 1
+        return formula_count
+
+    cache_key = _get_sheet_cache_key(Path(workbook_path), sheet.title, "formula_count")
+
+    with _sheet_cache_lock:
+        cached = _formula_count_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
     formula_count = 0
 
     for row_index in range(1, sheet.max_row + 1):
@@ -42,13 +83,23 @@ def count_formula_cells(sheet) -> int:
             if cell.data_type == "f":
                 formula_count += 1
 
+    with _sheet_cache_lock:
+        _formula_count_cache[cache_key] = formula_count
+
     return formula_count
 
 
 def build_sheet_summary(workbook_path, sheet) -> dict:
+    cache_key = _get_sheet_cache_key(workbook_path, sheet.title, "summary")
+
+    with _sheet_cache_lock:
+        cached = _sheet_summary_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
     formula_cells_count = count_formula_cells(sheet)
 
-    return {
+    payload = {
         "fileName": workbook_path.name,
         "sheet": {
             "title": sheet.title,
@@ -59,6 +110,11 @@ def build_sheet_summary(workbook_path, sheet) -> dict:
             "formulaCellsCount": formula_cells_count,
         },
     }
+
+    with _sheet_cache_lock:
+        _sheet_summary_cache[cache_key] = payload
+
+    return payload
 
 
 def build_sheet_range(
@@ -102,6 +158,8 @@ def build_sheet_range(
 
     for row_index in range(start_row, end_row + 1):
         for column_index in range(start_column, end_column + 1):
+            requested_coordinate = formula_sheet.cell(row=row_index, column=column_index).coordinate
+
             formula_cell, value_cell = get_display_cells(
                 formula_sheet=formula_sheet,
                 value_sheet=value_sheet,
@@ -113,7 +171,7 @@ def build_sheet_range(
                 formula_cell=formula_cell,
                 value_cell=value_cell,
                 sheet=formula_sheet,
-                requested_coordinate=formula_sheet.cell(row=row_index, column=column_index).coordinate,
+                requested_coordinate=requested_coordinate,
                 include_empty=include_empty,
             )
 
@@ -122,7 +180,7 @@ def build_sheet_range(
 
             payload["requestedRow"] = row_index
             payload["requestedColumn"] = column_index
-            payload["requestedAddress"] = formula_sheet.cell(row=row_index, column=column_index).coordinate
+            payload["requestedAddress"] = requested_coordinate
             payload["isMergedDisplayValue"] = payload["address"] != payload["requestedAddress"]
 
             cells.append(payload)
@@ -148,10 +206,17 @@ def build_sheet_formulas(
     value_sheet,
     limit: int,
 ) -> dict:
+    cache_key = _get_sheet_cache_key(workbook_path, formula_sheet.title, f"formulas::{limit}")
+
+    with _sheet_cache_lock:
+        cached = _sheet_formulas_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
     formula_cells_count = count_formula_cells(formula_sheet)
 
     if formula_cells_count == 0:
-        return {
+        payload = {
             "fileName": workbook_path.name,
             "sheet": formula_sheet.title,
             "limit": limit,
@@ -160,10 +225,17 @@ def build_sheet_formulas(
             "cells": [],
         }
 
+        with _sheet_cache_lock:
+            _sheet_formulas_cache[cache_key] = payload
+
+        return payload
+
     cells = []
 
     for row_index in range(1, formula_sheet.max_row + 1):
         for column_index in range(1, formula_sheet.max_column + 1):
+            requested_coordinate = formula_sheet.cell(row=row_index, column=column_index).coordinate
+
             formula_cell, value_cell = get_display_cells(
                 formula_sheet=formula_sheet,
                 value_sheet=value_sheet,
@@ -178,7 +250,7 @@ def build_sheet_formulas(
                 formula_cell=formula_cell,
                 value_cell=value_cell,
                 sheet=formula_sheet,
-                requested_coordinate=formula_sheet.cell(row=row_index, column=column_index).coordinate,
+                requested_coordinate=requested_coordinate,
                 include_empty=True,
             )
 
@@ -187,13 +259,13 @@ def build_sheet_formulas(
 
             payload["requestedRow"] = row_index
             payload["requestedColumn"] = column_index
-            payload["requestedAddress"] = formula_sheet.cell(row=row_index, column=column_index).coordinate
+            payload["requestedAddress"] = requested_coordinate
             payload["isMergedDisplayValue"] = payload["address"] != payload["requestedAddress"]
 
             cells.append(payload)
 
             if len(cells) >= limit:
-                return {
+                response = {
                     "fileName": workbook_path.name,
                     "sheet": formula_sheet.title,
                     "limit": limit,
@@ -202,7 +274,12 @@ def build_sheet_formulas(
                     "cells": cells,
                 }
 
-    return {
+                with _sheet_cache_lock:
+                    _sheet_formulas_cache[cache_key] = response
+
+                return response
+
+    response = {
         "fileName": workbook_path.name,
         "sheet": formula_sheet.title,
         "limit": limit,
@@ -210,3 +287,8 @@ def build_sheet_formulas(
         "truncated": False,
         "cells": cells,
     }
+
+    with _sheet_cache_lock:
+        _sheet_formulas_cache[cache_key] = response
+
+    return response

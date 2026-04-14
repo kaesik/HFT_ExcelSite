@@ -4,11 +4,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes_frontend import router as frontend_router
-from app.api.routes_workbooks import router as workbooks_router
+from backend.api.routes_frontend import router as frontend_router
+from backend.api.routes_workbooks import router as workbooks_router
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-STATIC_DIR = BASE_DIR / "static"
+FRONTEND_DIR = BASE_DIR / "frontend"
 
 app = FastAPI(title="HFT Excel Localhost")
 
@@ -20,7 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/frontend", StaticFiles(directory=FRONTEND_DIR), name="frontend")
 
 app.include_router(frontend_router)
 app.include_router(workbooks_router)

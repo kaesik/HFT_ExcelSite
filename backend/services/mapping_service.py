@@ -1,15 +1,41 @@
 ﻿from __future__ import annotations
 
+from pathlib import Path
+from threading import RLock
 from typing import Any
 
-from app.color_rules import COLOR_ROLE_MAP
-from app.services.cell_service import build_cell_payload
-from app.services.cell_service import get_display_cells
-from app.services.cell_service import get_data_validation_info
-
+from backend.color_rules import COLOR_ROLE_MAP
+from backend.services.cell_service import build_cell_payload
+from backend.services.cell_service import get_data_validation_info
+from backend.services.cell_service import get_display_cells
 
 RESULT_COLUMNS = {"H", "I", "K", "X", "Y", "Z"}
 RESULT_STATUS_VALUES = {"OK", "!!!", "<1,0", ">1,0", "< 1,0", "> 1,0"}
+
+_mapping_cache_lock = RLock()
+_mapping_cache: dict[str, dict[str, Any]] = {}
+
+VALID_COLOR_ROLES = set(COLOR_ROLE_MAP.values())
+
+
+def _get_sheet_cache_key(workbook_path: Path, sheet_name: str, suffix: str) -> str:
+    try:
+        modified_time = workbook_path.stat().st_mtime
+    except OSError:
+        modified_time = 0
+
+    return f"{workbook_path.resolve()}::{modified_time}::{sheet_name}::{suffix}"
+
+
+def _get_cached_payload(cache_key: str) -> dict[str, Any] | None:
+    with _mapping_cache_lock:
+        return _mapping_cache.get(cache_key)
+
+
+def _set_cached_payload(cache_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    with _mapping_cache_lock:
+        _mapping_cache[cache_key] = payload
+    return payload
 
 
 def is_text_label(value: Any) -> bool:
@@ -59,7 +85,14 @@ def get_color_role(fill_color: str | None) -> str | None:
     if fill_color is None:
         return None
 
-    return COLOR_ROLE_MAP.get(fill_color)
+    if fill_color in COLOR_ROLE_MAP:
+        return COLOR_ROLE_MAP[fill_color]
+
+    if fill_color.startswith("theme:") and ":tint:" in fill_color:
+        base_theme = fill_color.split(":tint:")[0]
+        return COLOR_ROLE_MAP.get(base_theme)
+
+    return None
 
 
 def detect_input_type(color_role: str | None, cell_payload: dict[str, Any]) -> str:
@@ -109,6 +142,11 @@ def build_sheet_candidates(
     formula_sheet,
     value_sheet,
 ) -> dict[str, Any]:
+    cache_key = _get_sheet_cache_key(workbook_path, formula_sheet.title, "candidates")
+    cached = _get_cached_payload(cache_key)
+    if cached is not None:
+        return cached
+
     inputs: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
 
@@ -167,14 +205,17 @@ def build_sheet_candidates(
             if is_result_candidate(item):
                 results.append(item)
 
-    return {
-        "fileName": workbook_path.name,
-        "sheet": formula_sheet.title,
-        "inputsCount": len(inputs),
-        "resultsCount": len(results),
-        "inputs": inputs,
-        "results": results,
-    }
+    return _set_cached_payload(
+        cache_key,
+        {
+            "fileName": workbook_path.name,
+            "sheet": formula_sheet.title,
+            "inputsCount": len(inputs),
+            "resultsCount": len(results),
+            "inputs": inputs,
+            "results": results,
+        },
+    )
 
 
 def build_sheet_color_statistics(
@@ -182,6 +223,11 @@ def build_sheet_color_statistics(
     formula_sheet,
     value_sheet,
 ) -> dict[str, Any]:
+    cache_key = _get_sheet_cache_key(workbook_path, formula_sheet.title, "colors")
+    cached = _get_cached_payload(cache_key)
+    if cached is not None:
+        return cached
+
     colors_map: dict[str, dict[str, Any]] = {}
 
     for row_index in range(1, formula_sheet.max_row + 1):
@@ -244,12 +290,15 @@ def build_sheet_color_statistics(
 
     colors.sort(key=lambda item: item["count"], reverse=True)
 
-    return {
-        "fileName": workbook_path.name,
-        "sheet": formula_sheet.title,
-        "colorsCount": len(colors),
-        "colors": colors,
-    }
+    return _set_cached_payload(
+        cache_key,
+        {
+            "fileName": workbook_path.name,
+            "sheet": formula_sheet.title,
+            "colorsCount": len(colors),
+            "colors": colors,
+        },
+    )
 
 
 def build_sheet_style_diagnostics(
@@ -272,12 +321,7 @@ def build_sheet_style_diagnostics(
             fill = cell.fill
             fg_color = fill.fgColor if fill else None
             bg_color = fill.bgColor if fill else None
-
-            validation_info = get_data_validation_info(
-                sheet=formula_sheet,
-                requested_coordinate=cell.coordinate,
-                source_coordinate=cell.coordinate,
-            )
+            validation_info = get_data_validation_info(formula_sheet, cell.coordinate)
 
             cells.append(
                 {
@@ -295,7 +339,7 @@ def build_sheet_style_diagnostics(
                     "bgColorTheme": str(getattr(bg_color, "theme", None)) if bg_color else None,
                     "bgColorTint": str(getattr(bg_color, "tint", None)) if bg_color else None,
                     "hasFormula": cell.data_type == "f",
-                    "hasDropdown": validation_info is not None and validation_info.get("type") == "list",
+                    "hasDropdown": validation_info is not None,
                     "validationInfo": validation_info,
                 }
             )
@@ -317,33 +361,139 @@ def build_sheet_style_diagnostics(
 def build_sheet_dropdown_diagnostics(
     workbook_path,
     formula_sheet,
+    value_sheet,
 ) -> dict[str, Any]:
+    cache_key = _get_sheet_cache_key(workbook_path, formula_sheet.title, "dropdowns")
+    cached = _get_cached_payload(cache_key)
+    if cached is not None:
+        return cached
+
     dropdowns: list[dict[str, Any]] = []
 
-    data_validations = getattr(formula_sheet, "data_validations", None)
-    validations = getattr(data_validations, "dataValidation", None) if data_validations else None
+    for row_index in range(1, formula_sheet.max_row + 1):
+        for column_index in range(1, formula_sheet.max_column + 1):
+            formula_cell, value_cell = get_display_cells(
+                formula_sheet=formula_sheet,
+                value_sheet=value_sheet,
+                row=row_index,
+                column=column_index,
+            )
 
-    if validations:
-        for validation in validations:
-            if getattr(validation, "type", None) != "list":
+            requested_address = formula_sheet.cell(row=row_index, column=column_index).coordinate
+
+            payload = build_cell_payload(
+                formula_cell=formula_cell,
+                value_cell=value_cell,
+                sheet=formula_sheet,
+                requested_coordinate=requested_address,
+                include_empty=True,
+            )
+
+            if payload is None:
+                continue
+
+            validation_info = payload.get("validationInfo")
+            if not validation_info:
+                continue
+
+            if validation_info.get("type") != "list":
                 continue
 
             dropdowns.append(
                 {
-                    "type": getattr(validation, "type", None),
-                    "formula1": str(getattr(validation, "formula1", None)),
-                    "formula2": str(getattr(validation, "formula2", None)),
-                    "allowBlank": getattr(validation, "allowBlank", None),
-                    "showDropDown": getattr(validation, "showDropDown", None),
-                    "showInputMessage": getattr(validation, "showInputMessage", None),
-                    "showErrorMessage": getattr(validation, "showErrorMessage", None),
-                    "sqref": str(getattr(validation, "sqref", None)),
+                    "address": requested_address,
+                    "sourceAddress": payload["address"],
+                    "value": payload["value"],
+                    "cachedValue": payload["cachedValue"],
+                    "fillColor": payload["fillColor"],
+                    "hasFormula": payload["hasFormula"],
+                    "validationInfo": validation_info,
                 }
             )
 
-    return {
-        "fileName": workbook_path.name,
-        "sheet": formula_sheet.title,
-        "dropdownsCount": len(dropdowns),
-        "dropdowns": dropdowns,
-    }
+    return _set_cached_payload(
+        cache_key,
+        {
+            "fileName": workbook_path.name,
+            "sheet": formula_sheet.title,
+            "dropdownsCount": len(dropdowns),
+            "dropdowns": dropdowns,
+        },
+    )
+
+
+def build_sheet_colored_cells(
+    workbook_path,
+    formula_sheet,
+    value_sheet,
+) -> dict[str, Any]:
+    cache_key = _get_sheet_cache_key(workbook_path, formula_sheet.title, "colored_cells")
+    cached = _get_cached_payload(cache_key)
+    if cached is not None:
+        return cached
+
+    colored_cells: list[dict[str, Any]] = []
+
+    for row_index in range(1, formula_sheet.max_row + 1):
+        for column_index in range(1, formula_sheet.max_column + 1):
+            formula_cell, value_cell = get_display_cells(
+                formula_sheet=formula_sheet,
+                value_sheet=value_sheet,
+                row=row_index,
+                column=column_index,
+            )
+
+            requested_address = formula_sheet.cell(row=row_index, column=column_index).coordinate
+
+            payload = build_cell_payload(
+                formula_cell=formula_cell,
+                value_cell=value_cell,
+                sheet=formula_sheet,
+                requested_coordinate=requested_address,
+                include_empty=False,
+            )
+
+            if payload is None:
+                continue
+
+            fill_color = payload.get("fillColor")
+            color_role = get_color_role(fill_color)
+
+            if color_role not in VALID_COLOR_ROLES:
+                continue
+
+            label = find_nearest_label(
+                sheet=formula_sheet,
+                row=row_index,
+                column=column_index,
+            )
+
+            item = {
+                "address": requested_address,
+                "sourceAddress": payload["address"],
+                "label": label,
+                "value": payload["value"],
+                "cachedValue": payload["cachedValue"],
+                "formula": payload["formula"],
+                "dataType": payload["dataType"],
+                "numberFormat": payload["numberFormat"],
+                "fillColor": fill_color,
+                "colorRole": color_role,
+                "hasDropdown": payload["hasDropdown"],
+                "validationInfo": payload.get("validationInfo"),
+                "hasFormula": payload["hasFormula"],
+                "isMergedDisplayValue": payload.get("isMergedDisplayValue", False),
+                "inputType": detect_input_type(color_role, payload),
+            }
+
+            colored_cells.append(item)
+
+    return _set_cached_payload(
+        cache_key,
+        {
+            "fileName": workbook_path.name,
+            "sheet": formula_sheet.title,
+            "count": len(colored_cells),
+            "cells": colored_cells,
+        },
+    )
